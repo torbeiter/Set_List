@@ -7,24 +7,17 @@ import com.example.set_list.data.SetlistRepository
 import com.example.set_list.midi.MidiViewModel
 import com.example.set_list.ui.SetlistViewModel
 
-/**
- * ViewModel Factory to provide repositories and application context to ViewModels.
- */
-class AppViewModelFactory(
-    private val application: Application,
-    private val repository: SetlistRepository
-) : ViewModelProvider.Factory {
+class AppViewModelFactory(private val application: Application, private val repository: SetlistRepository) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
             modelClass.isAssignableFrom(SetlistViewModel::class.java) -> {
-                @Suppress("UNCHECKED_CAST")
                 SetlistViewModel(repository) as T
             }
             modelClass.isAssignableFrom(MidiViewModel::class.java) -> {
-                @Suppress("UNCHECKED_CAST")
                 MidiViewModel(application, repository) as T
             }
-            else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+            else -> throw IllegalArgumentException("Unknown ViewModel class")
         }
     }
 }

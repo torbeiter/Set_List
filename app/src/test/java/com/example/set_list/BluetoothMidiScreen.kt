@@ -1,4 +1,4 @@
-package com.example.set_list.midi
+package com.example.set_list
 
 import android.content.Intent
 import android.net.Uri

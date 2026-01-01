@@ -143,7 +143,7 @@ fun MidiDebugScreen(
                     Button(
                         onClick = {
                             // Sende verschiedene Kits
-                            viewModel.switchToKit(1, 9)  // Channel 10, Kit 1
+                            viewModel.switchToKit(1)
                         },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = connectedDevice != null
@@ -157,7 +157,7 @@ fun MidiDebugScreen(
 
                     Button(
                         onClick = {
-                            viewModel.switchToKit(50, 9)  // Channel 10, Kit 50
+                            viewModel.switchToKit(50)
                         },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = connectedDevice != null
@@ -171,7 +171,7 @@ fun MidiDebugScreen(
 
                     Button(
                         onClick = {
-                            viewModel.switchToKit(100, 9)  // Channel 10, Kit 100
+                            viewModel.switchToKit(100)
                         },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = connectedDevice != null

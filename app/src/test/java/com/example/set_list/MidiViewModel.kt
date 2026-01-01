@@ -1,4 +1,4 @@
-package com.example.set_list.midi
+package com.example.set_list
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -32,7 +32,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -187,34 +186,35 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
                 _isSyncing.value = true
                 _syncProgress.value = 0f
                 _lastSyncedKitName.value = "Starting sync..."
+                sysExReceiver.clearData()
 
                 for (kitNum in 1..RolandV71Config.TOTAL_KITS) {
-                    sysExReceiver.clearData() // Clear before each request
                     responseReceived.set(false)
                     val address = RolandV71Config.getKitNameAddress(kitNum)
                     val request = createSysExRequest(address)
                     inputPort?.send(request, 0, request.size)
 
                     var attempts = 0
-                    while (!responseReceived.get() && attempts < 50) { // Increased timeout
+                    while (!responseReceived.get() && attempts < 30) {
                         delay(20)
                         attempts++
                     }
-
+                    
                     if (responseReceived.get()) {
-                        val responsePacket = sysExReceiver.getLatestPacket()
-                        responsePacket?.let {
+                         val lastPacket = synchronized(sysExReceiver.receivedData) { sysExReceiver.receivedData.lastOrNull() }
+                         lastPacket?.let {
                             val kitName = extractKitName(it)
-                            _lastSyncedKitName.value = "Kit $kitNum: $kitName"
-                            if (kitName.isNotBlank() && kitName != "Invalid Packet") {
-                                repository.updateKitName(kitNum, kitName)
-                            }
-                        }
+                             _lastSyncedKitName.value = "Kit $kitNum: $kitName"
+                             if (kitName.isNotBlank()) {
+                                 repository.updateKitName(kitNum, kitName)
+                             }
+                         }
                     } else {
                         _lastSyncedKitName.value = "Kit $kitNum: Timeout..."
                     }
 
                     _syncProgress.value = kitNum.toFloat() / RolandV71Config.TOTAL_KITS
+                    delay(10) // Small delay to not overwhelm the device
                 }
 
                 _lastSyncedKitName.value = "Sync Complete!"
@@ -230,11 +230,11 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
             }
         }
     }
-
+    
     private fun extractKitName(msg: ByteArray): String {
         return try {
-            if (msg.size >= 18 && msg[6] == RolandV71Config.COMMAND_DT1) {
-                val nameBytes = msg.sliceArray(11 until 11 + RolandV71Config.KIT_NAME_LENGTH)
+            if (msg.size >= 18 && msg[5] == RolandV71Config.COMMAND_DT1) {
+                val nameBytes = msg.sliceArray(10 until 10 + RolandV71Config.KIT_NAME_LENGTH)
                 String(nameBytes).trim().replace("\u0000", "")
             } else {
                 "Invalid Packet"
@@ -317,43 +317,13 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
     }
 
     inner class SysExReceiver : MidiReceiver() {
-        private var sysexBuffer = ByteArrayOutputStream()
-        private var inSysEx = false
-        private var lastPacket: ByteArray? = null
-
-        fun clearData() {
-            synchronized(this) {
-                lastPacket = null
-                sysexBuffer.reset()
-                inSysEx = false
-            }
-        }
-
-        fun getLatestPacket(): ByteArray? {
-            return synchronized(this) {
-                lastPacket
-            }
-        }
-
+        val receivedData = mutableListOf<ByteArray>()
+        fun clearData() = synchronized(receivedData) { receivedData.clear() }
         override fun onSend(msg: ByteArray, offset: Int, count: Int, timestamp: Long) {
-            for (i in offset until offset + count) {
-                val byte = msg[i]
-
-                if (byte == SYSEX_START) {
-                    sysexBuffer.reset()
-                    sysexBuffer.write(byte.toInt())
-                    inSysEx = true
-                } else if (inSysEx) {
-                    sysexBuffer.write(byte.toInt())
-                    if (byte == SYSEX_END) {
-                        synchronized(this) {
-                            lastPacket = sysexBuffer.toByteArray()
-                        }
-                        responseReceived.set(true)
-                        inSysEx = false
-                        sysexBuffer.reset()
-                    }
-                }
+            val data = msg.copyOfRange(offset, offset + count)
+            if (count >= 18 && data.getOrNull(0) == SYSEX_START && data.getOrNull(5) == RolandV71Config.COMMAND_DT1) {
+                synchronized(receivedData) { receivedData.add(data) }
+                responseReceived.set(true)
             }
         }
     }
