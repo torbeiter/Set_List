@@ -1,89 +1,66 @@
 package com.example.set_list.midi
 
-/**
- * Roland V-Drums SysEx Configuration for V71 Model
- *
- * Adressen und Werte basierend auf der V71 MIDI Implementation v1.12.
- */
 object RolandV71Config {
+    // MIDI IDs
+    const val ROLAND_ID: Byte = 0x41
+    const val DEVICE_ID: Byte = 0x10 // Standardwert 17 (0x10)
 
-    // SysEx Befehle
+    // Korrekte Model ID für V71 laut Handbuch (01H 06H 01H)
+    val MODEL_ID = byteArrayOf(0x01, 0x06, 0x01)
+
+    // Roland Befehle
+    const val COMMAND_RQ1: Byte = 0x11 // Request Data
+    const val COMMAND_DT1: Byte = 0x12 // Data Set (Antwort)
+
     const val SYSEX_START: Byte = 0xF0.toByte()
     const val SYSEX_END: Byte = 0xF7.toByte()
-    const val ROLAND_ID: Byte = 0x41
-    const val DEVICE_ID: Byte = 0x10 // Default device ID
-    const val COMMAND_RQ1: Byte = 0x11 // Request Data 1
-    const val COMMAND_DT1: Byte = 0x12 // Data Set 1
 
-    /**
-     * Model ID für das Roland V71
-     */
-    val MODEL_ID = byteArrayOf(
-        0x01.toByte(), // Model ID#1 (V71)
-        0x06.toByte(), // Model ID#2 (V71)
-        0x01.toByte()  // Model ID#3 (V71)
-    )
-
-    /**
-     * Gesamtzahl der Kits im V71-Modul.
-     */
+    const val MIDI_CHANNEL = 9 // Kanal 10 (0-indexed)
     const val TOTAL_KITS = 200
-
-    /**
-     * Start-Adresse für Kit 1.
-     */
-    private const val KIT_BASE_ADDRESS = 0x04000000L
-
-    /**
-     * Offset zwischen den Adressen aufeinanderfolgender Kits.
-     */
-    private const val KIT_ADDRESS_OFFSET = 0x040000L
-
-    /**
-     * Länge des Kit-Namens in Bytes.
-     */
     const val KIT_NAME_LENGTH = 16
 
     /**
-     * MIDI Channel für Drums (0-indexed).
-     *
-     * WICHTIG:
-     * - 9 = MIDI Channel 10 (Standard für Drums)
-     * - Das V71 MUSS folgende Einstellungen haben:
-     *   SETUP → MIDI → Rx Channel: 10
-     *   SETUP → MIDI → Program Change: ON  ← KRITISCH!
-     */
-    var MIDI_CHANNEL = 9  // Channel 10 (0-indexed)
-
-    /**
-     * Berechnet die 4-Byte SysEx-Adresse für einen gegebenen Kit-Namen.
+     * Berechnet die Startadresse für einen Kit-Namen.
+     * Basisadresse Kit 1: 04 00 00 00
+     * Offset pro Kit: 00 01 00 00
      */
     fun getKitNameAddress(kitNumber: Int): ByteArray {
-        require(kitNumber in 1..TOTAL_KITS) {
-            "Kit number must be between 1 and $TOTAL_KITS"
-        }
-        val targetAddress = KIT_BASE_ADDRESS + (kitNumber - 1) * KIT_ADDRESS_OFFSET
-        return longTo4ByteArray(targetAddress)
+        val baseAddress = 0x04000000
+        val offsetPerKit = 0x00010000
+        val kitAddress = baseAddress + ((kitNumber - 1) * offsetPerKit)
+
+        // Roland nutzt ein 4-Byte Adress-Schema (7-bit)
+        return byteArrayOf(
+            ((kitAddress shr 21) and 0x7F).toByte(),
+            ((kitAddress shr 14) and 0x7F).toByte(),
+            ((kitAddress shr 7) and 0x7F).toByte(),
+            (kitAddress and 0x7F).toByte()
+        )
     }
 
     /**
-     * Berechnet die Kit-Nummer aus einer gegebenen 4-Byte SysEx-Adresse.
+     * Extrahiert die Kit-Nummer aus der empfangenen Adresse.
      */
     fun getKitNumberFromAddress(address: ByteArray): Int {
-        require(address.size == 4) { "Address must be 4 bytes" }
-        val targetAddress = byteArrayToLong(address)
-        return (((targetAddress - KIT_BASE_ADDRESS) / KIT_ADDRESS_OFFSET) + 1).toInt()
+        val addr = ((address[0].toInt() and 0x7F) shl 21) or
+                ((address[1].toInt() and 0x7F) shl 14) or
+                ((address[2].toInt() and 0x7F) shl 7) or
+                (address[3].toInt() and 0x7F)
+
+        val baseAddress = 0x04000000
+        val offsetPerKit = 0x00010000
+        return ((addr - baseAddress) / offsetPerKit) + 1
     }
 
     /**
-     * Konvertiert einen Long-Wert in ein 4-Byte-Array (Big-Endian).
+     * Konvertiert eine Länge/Größe in das Roland 4-Byte Format.
      */
     fun longTo4ByteArray(value: Long): ByteArray {
         return byteArrayOf(
-            ((value shr 24) and 0xFF).toByte(),
-            ((value shr 16) and 0xFF).toByte(),
-            ((value shr 8) and 0xFF).toByte(),
-            (value and 0xFF).toByte()
+            ((value shr 21) and 0x7F).toByte(),
+            ((value shr 14) and 0x7F).toByte(),
+            ((value shr 7) and 0x7F).toByte(),
+            (value and 0x7F).toByte()
         )
     }
 
