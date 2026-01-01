@@ -11,10 +11,6 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.midi.*
 import android.os.Build
@@ -32,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.IOException
 
+data class BleDevice(val address: String, val name: String, val device: BluetoothDevice)
+
 class MidiViewModel(application: Application, private val repository: SetlistRepository) : AndroidViewModel(application) {
 
     private val TAG = "MidiViewModel"
@@ -40,11 +38,9 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager?.adapter
     private val bleScanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
     private val handler = Handler(Looper.getMainLooper())
-    private val sharedPreferences = application.getSharedPreferences("midi_prefs", Context.MODE_PRIVATE)
 
     private var midiDevice: MidiDevice? = null
     private var inputPort: MidiInputPort? = null
-    private var outputPort: MidiOutputPort? = null
     private val sysExReceiver = SysExReceiver()
 
     private val _discoveredDevices = MutableStateFlow<List<BleDevice>>(emptyList())
@@ -70,29 +66,6 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
 
     private val _syncProgress = MutableStateFlow(0f)
     val syncProgress = _syncProgress.asStateFlow()
-
-    private val bluetoothStateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
-                when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
-                    BluetoothAdapter.STATE_ON -> {
-                        Log.d(TAG, "Bluetooth turned ON. Attempting to auto-connect.")
-                        handler.postDelayed({ autoConnectToLastDevice() }, 1000)
-                    }
-                    BluetoothAdapter.STATE_OFF -> {
-                        Log.d(TAG, "Bluetooth turned OFF. Disconnecting.")
-                        disconnect()
-                    }
-                }
-            }
-        }
-    }
-
-    init {
-        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
-        application.registerReceiver(bluetoothStateReceiver, filter)
-        autoConnectToLastDevice()
-    }
 
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
@@ -209,62 +182,80 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
             } else {
                 _connectedDevice.value = deviceToConnect
                 _connectionStatus.value = "Connected to ${deviceToConnect.name}"
-                saveLastConnectedDevice(deviceToConnect.address)
+                Log.i(TAG, "✓ Connected to ${deviceToConnect.name}")
             }
         }, handler)
     }
 
+    /**
+     * Verbindet nach dem Sync komplett neu mit dem Device.
+     * Dies ist notwendig, weil der Sync das V71 in einen kaputten Zustand versetzt.
+     */
     @SuppressLint("MissingPermission")
-    fun autoConnectToLastDevice() {
-        if (!hasBluetoothPermissions() || bluetoothAdapter?.isEnabled == false) {
-            return
-        }
-        if (connectedDevice.value != null) return
-
-        val lastDeviceAddress = sharedPreferences.getString("last_connected_device_address", null) ?: return
-
-        try {
-            val pairedDevices: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices
-            val deviceToConnect = pairedDevices?.find { it.address == lastDeviceAddress }
-
-            if (deviceToConnect != null) {
-                Log.d(TAG, "Found last connected device: ${deviceToConnect.name}. Trying to connect...")
-                val bleDevice = BleDevice(deviceToConnect.address, deviceToConnect.name ?: "Unknown Device", deviceToConnect)
-                connectToDevice(bleDevice)
+    private fun reconnectDevice(device: BleDevice) {
+        Log.i(TAG, "Reconnecting to ${device.name}...")
+        midiManager?.openBluetoothDevice(device.device, { openedDevice ->
+            if (openedDevice == null) {
+                Log.e(TAG, "Reconnect failed")
+                _errorMessage.value = "Reconnect failed. Please reconnect manually."
+                _connectionStatus.value = "Reconnect failed"
+                _connectedDevice.value = null
+                return@openBluetoothDevice
             }
-        } catch (e: SecurityException) {
-            _errorMessage.value = "Auto-connect failed: Permission denied."
-        }
+
+            midiDevice = openedDevice
+            inputPort = openedDevice.openInputPort(0)
+
+            if (inputPort == null) {
+                Log.e(TAG, "Failed to open input port on reconnect")
+                _errorMessage.value = "Reconnect failed. Please reconnect manually."
+                _connectionStatus.value = "Reconnect failed"
+                _connectedDevice.value = null
+                midiDevice?.close()
+                midiDevice = null
+            } else {
+                _connectedDevice.value = device
+                _connectionStatus.value = "Connected to ${device.name}"
+                Log.i(TAG, "✓ Reconnected successfully - Kit switching restored")
+            }
+        }, handler)
     }
 
-    private fun saveLastConnectedDevice(address: String) {
-        sharedPreferences.edit().putString("last_connected_device_address", address).apply()
-    }
 
-    fun switchToKit(kitNumber: Int, channel: Int = 9) {
+
+    fun switchToKit(kitNumber: Int, channel: Int = RolandV71Config.MIDI_CHANNEL) {
         if (inputPort == null) {
             _errorMessage.value = "Not connected to any device."
             return
         }
+
         val programNumber = kitNumber - 1
         if (programNumber < 0 || programNumber > 127) {
-            _errorMessage.value = "Invalid kit number."
+            _errorMessage.value = "Invalid kit number: $kitNumber"
             return
         }
-        val buffer = ByteArray(2).apply {
+
+        val programChange = ByteArray(2).apply {
             this[0] = (0xC0 + channel).toByte()
             this[1] = programNumber.toByte()
         }
+
         try {
-            inputPort?.send(buffer, 0, buffer.size)
+            inputPort?.send(programChange, 0, programChange.size)
             _currentKit.value = kitNumber
+            Log.d(TAG, "TX: Kit #$kitNumber, Ch ${channel + 1}, Bytes: ${programChange.joinToString(" ") { "0x%02X".format(it) }}")
         } catch (e: IOException) {
-            _errorMessage.value = "Failed to send MIDI command: ${e.message}"
+            Log.e(TAG, "Failed to send Program Change", e)
+            _errorMessage.value = "Failed to switch kit: ${e.message}"
         }
     }
 
+    /**
+     * Synchronisiert Kit-Namen vom V71.
+     * WICHTIG: Nach dem Sync wird die Verbindung komplett neu aufgebaut!
+     */
     fun syncKitNames() {
-        if (midiDevice == null || inputPort == null) {
+        if (midiDevice == null) {
             _errorMessage.value = "Not connected. Cannot sync."
             return
         }
@@ -273,42 +264,113 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
             return
         }
 
-        var tempOutputPort: MidiOutputPort? = null
         viewModelScope.launch {
+            var tempOutputPort: MidiOutputPort? = null
+            var tempInputPort: MidiInputPort? = null
+
             try {
                 _isSyncing.value = true
                 _syncProgress.value = 0f
                 sysExReceiver.clearData()
 
+                Log.i(TAG, "Starting kit name sync...")
+
+                // KRITISCH: Input-Port schließen vor Output-Port öffnen!
+                Log.d(TAG, "Closing input port before sync...")
+                inputPort?.close()
+                inputPort = null
+
+                kotlinx.coroutines.delay(200) // Kurz warten
+
+                // Output-Port öffnen für Empfang
                 tempOutputPort = midiDevice?.openOutputPort(0)
                 if (tempOutputPort == null) {
-                    throw IOException("Failed to open output port for sync.")
+                    throw IOException("Failed to open output port")
                 }
-                tempOutputPort?.connect(sysExReceiver)
+                tempOutputPort.connect(sysExReceiver)
 
+                // Input-Port neu öffnen für Senden
+                tempInputPort = midiDevice?.openInputPort(0)
+                if (tempInputPort == null) {
+                    throw IOException("Failed to reopen input port")
+                }
+
+                Log.d(TAG, "Ports ready, sending requests...")
+
+                // SysEx-Requests senden
                 for (kitNum in 1..RolandV71Config.TOTAL_KITS) {
                     val address = RolandV71Config.getKitNameAddress(kitNum)
                     val request = createSysExRequest(address)
-                    inputPort?.send(request, 0, request.size)
+                    tempInputPort.send(request, 0, request.size)
                     _syncProgress.value = kitNum.toFloat() / RolandV71Config.TOTAL_KITS
-                    kotlinx.coroutines.delay(200)
+                    kotlinx.coroutines.delay(50)
                 }
 
-                kotlinx.coroutines.delay(1000)
+                kotlinx.coroutines.delay(2000)
+
+                val receivedCount = sysExReceiver.receivedData.size
+                Log.i(TAG, "Received $receivedCount of 200 kit names")
+
+                if (receivedCount == 0) {
+                    Log.w(TAG, "V71 did not respond - Tx Channel may be wrong or V71 is busy")
+                    _errorMessage.value = "No response from V71. Check: SETUP→MIDI→Tx Channel = 10"
+                } else {
+                    Log.i(TAG, "✓ Sync successful!")
+                }
+
+                // WICHTIG: Output-Port sauber "leeren" vor dem Schließen
+                Log.d(TAG, "Flushing output port...")
+                kotlinx.coroutines.delay(500) // Extra Zeit um alle Daten zu empfangen
 
             } catch (e: Exception) {
                 _errorMessage.value = "Sync failed: ${e.message}"
                 Log.e(TAG, "Sync failed", e)
             } finally {
-                _isSyncing.value = false
-                _syncProgress.value = 0f
+                // Alle Ports schließen
                 try {
+                    tempInputPort?.close()
                     tempOutputPort?.disconnect(sysExReceiver)
                     tempOutputPort?.close()
+                    Log.d(TAG, "Closed sync ports")
                 } catch (e: IOException) {
-                    Log.e(TAG, "Error closing temporary output port after sync", e)
+                    Log.e(TAG, "Error closing ports", e)
                 }
+
+                // Daten verarbeiten
                 processAndSaveSysExData(sysExReceiver.receivedData)
+
+                _isSyncing.value = false
+                _syncProgress.value = 0f
+
+                // KRITISCH: Nach Sync komplett neu verbinden
+                // Der Sync versetzt das V71 in einen kaputten Zustand für ~10 Min
+                Log.w(TAG, "⚠️ Sync completed. Performing full reconnect to fix V71...")
+                _connectionStatus.value = "Reconnecting after sync..."
+
+                val deviceToReconnect = _connectedDevice.value
+
+                // 1. Alles schließen
+                try {
+                    inputPort?.close()
+                    midiDevice?.close()
+                    inputPort = null
+                    midiDevice = null
+                    Log.d(TAG, "Closed all MIDI resources")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during cleanup", e)
+                }
+
+                // 2. Länger warten (V71 braucht Zeit zum "Reset")
+                kotlinx.coroutines.delay(2000)
+
+                // 3. Neu verbinden
+                if (deviceToReconnect != null) {
+                    reconnectDevice(deviceToReconnect)
+                } else {
+                    Log.e(TAG, "No device to reconnect to")
+                    _connectionStatus.value = "Sync completed - Please reconnect manually"
+                    _errorMessage.value = "Please disconnect and reconnect to restore kit switching"
+                }
             }
         }
     }
@@ -335,35 +397,44 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
 
     private fun processAndSaveSysExData(data: List<ByteArray>) {
         viewModelScope.launch {
+            var savedCount = 0
             for (message in data) {
                 if (message.size < 18 || message[0] != SYSEX_START || message.last() != SYSEX_END) continue
                 if (message[5] != RolandV71Config.COMMAND_DT1) continue
 
-                val address = message.sliceArray(6..9)
-                val kitNumber = RolandV71Config.getKitNumberFromAddress(address)
-                val nameBytes = message.sliceArray(10 until 10 + RolandV71Config.KIT_NAME_LENGTH)
-                val kitName = String(nameBytes).trim()
+                try {
+                    val address = message.sliceArray(6..9)
+                    val kitNumber = RolandV71Config.getKitNumberFromAddress(address)
+                    val nameBytes = message.sliceArray(10 until 10 + RolandV71Config.KIT_NAME_LENGTH)
+                    val kitName = String(nameBytes).trim().replace("\u0000", "")
 
-                if (kitName.isNotBlank()) {
-                    repository.updateKitName(kitNumber, kitName)
+                    if (kitName.isNotBlank() && kitNumber in 1..RolandV71Config.TOTAL_KITS) {
+                        repository.updateKitName(kitNumber, kitName)
+                        savedCount++
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error processing kit name", e)
                 }
             }
+            Log.i(TAG, "✓ Saved $savedCount kit names")
         }
     }
 
     fun disconnect() {
         try {
             inputPort?.close()
-            outputPort?.close()
-            midiDevice?.close()
-        } catch (e: IOException) {
-            Log.e(TAG, "Error closing MIDI resources", e)
-        } finally {
             inputPort = null
-            outputPort = null
+
+            midiDevice?.close()
             midiDevice = null
+
             _connectedDevice.value = null
             _connectionStatus.value = "Not connected"
+            _currentKit.value = null
+
+            Log.i(TAG, "Disconnected")
+        } catch (e: IOException) {
+            Log.e(TAG, "Error disconnecting", e)
         }
     }
 
@@ -375,14 +446,16 @@ class MidiViewModel(application: Application, private val repository: SetlistRep
         super.onCleared()
         stopDeviceScan()
         disconnect()
-        getApplication<Application>().unregisterReceiver(bluetoothStateReceiver)
     }
 
     inner class SysExReceiver : MidiReceiver() {
         val receivedData = mutableListOf<ByteArray>()
+
         fun clearData() = receivedData.clear()
+
         override fun onSend(msg: ByteArray, offset: Int, count: Int, timestamp: Long) {
-            if (msg.getOrNull(offset) == SYSEX_START && msg.getOrNull(offset + count - 1) == SYSEX_END) {
+            if (count > 0 && msg.getOrNull(offset) == SYSEX_START &&
+                msg.getOrNull(offset + count - 1) == SYSEX_END) {
                 receivedData.add(msg.copyOfRange(offset, offset + count))
             }
         }

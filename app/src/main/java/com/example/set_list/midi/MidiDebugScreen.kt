@@ -238,14 +238,15 @@ fun MidiDebugScreen(
                             - Filter: "MidiViewModel"
                             - Look for: "TX: Kit #X on Channel 10"
                             - You should see: "0xC9 0xXX"
+                            - After sync: Look for "V71 wakeup sequence"
                             
                             Channel 10 = 0xC9 (0xC0 + 9)
                             Kit number = Second byte (0-indexed)
                             
-                            If you see these messages but V71 doesn't react:
-                            → V71 Program Change is OFF
-                            → V71 Rx Channel is not 10
-                            → V71 needs restart
+                            If kit switching stops after sync:
+                            → Wait ~20 seconds for wakeup sequence
+                            → Check log for "Sent MIDI Reset"
+                            → If still broken after 1 minute, reconnect
                         """.trimIndent(),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace
