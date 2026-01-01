@@ -1,0 +1,51 @@
+<resources>
+    <string name="app_name">Roland Setlist</string>
+
+    <!-- Navigation -->
+    <string name="nav_setlists">Setlists</string>
+    <string name="nav_midi">MIDI</string>
+
+    <!-- Setlist Strings -->
+    <string name="setlist_empty">No setlists yet</string>
+    <string name="setlist_create_hint">Tap + to create your first setlist</string>
+    <string name="setlist_name_hint">Setlist Name</string>
+    <string name="setlist_description_hint">Description (optional)</string>
+
+    <!-- Song Strings -->
+    <string name="song_empty">No songs yet</string>
+    <string name="song_create_hint">Tap + to add your first song</string>
+    <string name="song_name_hint">Song Name</string>
+    <string name="song_artist_hint">Artist (optional)</string>
+    <string name="song_kit_label">Drum Kit</string>
+    <string name="song_bpm_hint">BPM (optional)</string>
+    <string name="song_notes_hint">Notes (optional)</string>
+
+    <!-- MIDI Strings -->
+    <string name="midi_not_connected">Not connected</string>
+    <string name="midi_connecting">Connecting...</string>
+    <string name="midi_connected">Connected to %1$s</string>
+    <string name="midi_scan">Scan for Devices</string>
+    <string name="midi_scanning">Scanning...</string>
+    <string name="midi_no_devices">No devices found</string>
+
+    <!-- Actions -->
+    <string name="action_add">Add</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_disconnect">Disconnect</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_delete_setlist_title">Delete Setlist?</string>
+    <string name="dialog_delete_setlist_message">Are you sure you want to delete \"%1$s\"? This will also delete all songs in the setlist.</string>
+    <string name="dialog_delete_song_title">Delete Song?</string>
+    <string name="dialog_delete_song_message">Are you sure you want to delete \"%1$s\"?</string>
+
+    <!-- Errors -->
+    <string name="error_bluetooth_not_available">Bluetooth not available on this device</string>
+    <string name="error_bluetooth_disabled">Bluetooth is disabled</string>
+    <string name="error_permissions_not_granted">Bluetooth permissions not granted</string>
+    <string name="error_location_disabled">Location services must be enabled</string>
+    <string name="error_connection_failed">Connection failed</string>
+</resources>
